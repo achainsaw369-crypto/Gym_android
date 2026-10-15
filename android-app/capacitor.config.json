@@ -1,0 +1,14 @@
+{
+  "appId": "app.zhurnal.workouts",
+  "appName": "Журнал тренировок",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#ECEDEA"
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "LIGHT",
+      "insetsHandling": "css"
+    }
+  }
+}
