@@ -78,7 +78,18 @@ button{cursor:pointer}
 .tbar .tr{flex:1}
 .tbar .td{text-align:right;align-items:flex-end}
 .tbar .td b{font-size:18px;color:#DDE1E4}
-.tbar .hint{font-size:13px;color:#DDE1E4;line-height:1.3}
+.tbar .tc{flex-direction:row;align-items:center;gap:6px;flex:none}
+.tb{border:0;border-radius:9px;background:rgba(255,255,255,.16);color:#fff;font-weight:650;font-size:14px;height:36px;padding:0 8px;min-width:58px}
+.tb.go{background:var(--iron)}
+.tb:active{opacity:.75}
+.tbar.paused #trest{color:#9EA5AA}
+.btn.finish{margin-top:14px}
+.donecard{background:var(--paper);border-radius:12px;padding:10px 12px;margin:0 0 12px}
+.donecard b{display:block;font-size:17px}
+.donecard span{display:block;color:var(--mute);font-size:14px;font-variant-numeric:tabular-nums}
+.donecard .bn{display:flex;gap:8px}
+.donecard .bn .btn{flex:1;margin:10px 0 0;padding:10px}
+.fin{color:var(--mute);font-size:14px;margin:0 0 4px}
 .set input,.cardio input{width:100%;height:36px;border:1.5px solid var(--line);border-radius:8px;background:#fff;
   text-align:center;font-family:var(--num);font-weight:700;font-size:19px;padding:0;font-variant-numeric:tabular-nums}
 .set input::placeholder,.cardio input::placeholder{font-weight:500;color:#A3A8A5}
@@ -268,7 +279,7 @@ const fmtInt=n=>Math.round(n).toLocaleString('ru-RU');
 
 /* ---------- данные ---------- */
 const KEY='zhurnal.v1';
-const VERSION='1.19';
+const VERSION='1.20';
 /* Android-приложение: при сборке на GitHub сюда подставляется «владелец/репозиторий», откуда берутся новые версии APK */
 const GH_REPO='';
 const NP=window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()?Capacitor.Plugins||{}:null;   // null — обычный браузер/PWA
@@ -321,6 +332,7 @@ const byDateDesc=()=>[...db.workouts].sort((a,b)=>b.date.localeCompare(a.date)||
 /* ---------- расчёты ---------- */
 /* ---------- время: отметки подходов ---------- */
 const HOUR=36e5;
+const clock=ms=>{const d=new Date(ms);return `${d.getHours()}:${pad(d.getMinutes())}`};
 const fmtClock=ms=>{let x=Math.max(0,Math.floor(ms/1000));const h=Math.floor(x/3600);x-=h*3600;const m=Math.floor(x/60);x-=m*60;return h?`${h}:${pad(m)}:${pad(x)}`:`${m}:${pad(x)}`};
 const fmtDur=ms=>{const m=Math.round(ms/6e4);if(m<1)return '<1 мин';const h=Math.floor(m/60);return h?`${h} ч ${pad(m%60)} мин`:`${m} мин`};
 /* отметки времени выполненных подходов (силовые — подход с повторами, кардио — заполненное упражнение), по возрастанию */
@@ -345,27 +357,47 @@ function restBefore(w,t){
 }
 /* отметить время, когда подход впервые заполнен (только в сегодняшней тренировке и при включённой настройке) */
 function stamp(w,o,filled){
-  if(!filled||!o||o.t||!w||!cfg().timer||w.date!==todayStr())return false;
-  o.t=Date.now();return true;
+  if(!filled||!o||o.t||!w||w.finished||!cfg().timer||w.date!==todayStr())return false;
+  o.t=Date.now();
+  w.rt={acc:0,base:o.t,run:true};       // после каждого подхода секундомер отдыха начинает с нуля
+  return true;
 }
 const restLabel=(w,s)=>{if(!cfg().timer||!s||!s.r||!s.t)return '';const r=restBefore(w,s.t);return r?fmtClock(r):''};
+/* секундомер отдыха: {ms, run}; w.rt = {acc — накоплено, base — когда запущен, run — идёт ли} */
+function restState(w){
+  if(w.rt){const r=w.rt;return{ms:Math.max(0,r.acc+(r.run?Date.now()-r.base:0)),run:!!r.run}}
+  const a=stamps(w);
+  return a.length?{ms:Date.now()-a[a.length-1],run:true}:{ms:0,run:false};
+}
+const restText=st=>st.run&&st.ms>=3*HOUR?'—':fmtClock(st.ms);
 function timerBarHTML(w){
-  if(!cfg().timer||w.date!==todayStr())return '';
-  return `<div class="tbar" id="tbar">${timerBarInner(w)}</div>`;
+  if(!cfg().timer||w.finished||w.date!==todayStr())return '';
+  const st=restState(w);
+  return `<div class="tbar${!st.run&&st.ms?' paused':''}" id="tbar">${timerBarInner(w)}</div>`;
 }
 function timerBarInner(w){
-  const a=stamps(w);
-  if(!a.length)return '<span class="hint">⏱ Секундомер отдыха запустится после первого подхода</span>';
-  const since=Date.now()-a[a.length-1];
-  return `<div class="tr"><small>Отдых</small><b id="trest">${since<3*HOUR?fmtClock(since):'—'}</b></div>
-    <div class="td"><small>Тренировка</small><b id="tdur">${fmtDur(workDur(w))}</b></div>`;
+  const st=restState(w),d=workDur(w);
+  return `<div class="tr"><small>${!st.run&&st.ms?'Пауза':'Отдых'}</small><b id="trest">${restText(st)}</b></div>
+    <div class="tc"><button class="tb${st.run?'':' go'}" data-a="ttoggle">${st.run?'Стоп':'Старт'}</button><button class="tb" data-a="treset">Сброс</button></div>
+    <div class="td"><small>Тренировка</small><b id="tdur">${d?fmtDur(d):'—'}</b></div>`;
 }
-function updTimer(){
+function updTimer(full){
   const el=$('#tbar');if(!el)return;
   const w=curId&&wById(curId);if(!w)return;
-  el.innerHTML=timerBarInner(w);
+  const st=restState(w);
+  el.classList.toggle('paused',!st.run&&st.ms>0);
+  const tr=$('#trest',el);
+  if(full||!tr){el.innerHTML=timerBarInner(w);return}
+  tr.textContent=restText(st);
 }
-setInterval(()=>{if($('#tbar')&&document.visibilityState==='visible')updTimer()},1000);
+setInterval(()=>{if($('#tbar')&&document.visibilityState==='visible')updTimer(false)},1000);
+/* управление секундомером вручную */
+function timerCmd(w,cmd){
+  const st=restState(w),now=Date.now();
+  if(cmd==='toggle')w.rt=st.run?{acc:st.ms,base:now,run:false}:{acc:st.ms,base:now,run:true};
+  else if(cmd==='reset')w.rt={acc:0,base:now,run:st.run};
+  save();updTimer(true);
+}
 
 function totals(w){
   const t={sets:0,vol:0,km:0,min:0,dur:cfg().timer?workDur(w):0};
@@ -478,11 +510,13 @@ function editorHTML(w,canBack){
     <div class="date">${fmtLong(w.date)}</div>
     <input class="title" data-f="name" placeholder="Название, например «Грудь и спина»" value="${esc(w.name)}">
     <div id="totals">${totalsText(totals(w))}</div>
+    ${w.finished?`<p class="fin">Завершена в ${clock(w.finished)}</p>`:''}
     ${timerBarHTML(w)}
     ${tab==='today'?restHTML(w):''}
     ${w.entries.map((en,i)=>entryHTML(w,en,i)).join('')}
     <div class="addrow"><button class="add" data-a="addex">+ Упражнение</button><button class="add alt" data-a="tplsheet">Из шаблона</button></div>
     <textarea data-f="note" placeholder="Заметка к тренировке: самочувствие, сон, что поменять в следующий раз">${esc(w.note)}</textarea>
+    ${w.date===todayStr()?(w.finished?'<button class="btn finish" data-a="resume" data-id="'+w.id+'">Продолжить тренировку</button>':'<button class="btn finish" data-a="finish">✓ Завершить тренировку</button>'):''}
     <button class="btn ghost" data-a="savetpl">Сохранить как шаблон</button>
     <div class="foot"><label>Дата <input type="date" data-f="date" value="${w.date}"></label>
     <button class="danger" data-a="delw">Удалить тренировку</button></div>`;
@@ -538,10 +572,14 @@ function backupBannerHTML(){
 }
 function startHTML(){
   const last=byDateDesc()[0];
+  const done=db.workouts.filter(x=>x.date===todayStr()&&x.finished).sort((a,b)=>b.finished-a.finished);
+  const cards=done.map(x=>`<div class="donecard"><b>${esc(x.name||groupsText(x)||'Тренировка')}</b>
+    <span>${totalsText(totals(x))}</span><span>Завершена в ${clock(x.finished)}</span>
+    <div class="bn"><button class="btn ghost" data-a="openh" data-id="${x.id}">Открыть</button><button class="btn ghost" data-a="resume" data-id="${x.id}">Продолжить</button></div></div>`).join('');
   return `<div class="date">${fmtLong(todayStr())}</div>
     ${restHTML(null)}
-    <div class="start"><p class="lead">Сегодня тренировки ещё нет.</p>
-    <button class="btn big" data-a="start">Начать тренировку</button>
+    <div class="start"><p class="lead">${done.length?'Тренировка завершена':'Сегодня тренировки ещё нет.'}</p>${cards}
+    <button class="btn big" data-a="start">${done.length?'Начать новую тренировку':'Начать тренировку'}</button>
     <button class="btn ghost" data-a="tplsheet">Начать по шаблону</button>
     ${last?`<button class="btn ghost" data-a="repeat">Повторить прошлую: ${esc(last.name||fmtMid(last.date))}</button>`:''}</div>
     ${newDateHTML()}
@@ -700,7 +738,7 @@ function tplEditorHTML(t){
 function render(){
   let html='';curId=null;
   if(tab==='today'){
-    const w=editing?wById(editing):byDateDesc().find(x=>x.date===todayStr());
+    const w=editing?wById(editing):byDateDesc().find(x=>x.date===todayStr()&&!x.finished);
     html=w?editorHTML(w,false):startHTML();
     html=backupBannerHTML()+html;
   }else if(tab==='history'){
@@ -722,7 +760,7 @@ function rerenderEntry(sec){
   t.innerHTML=entryHTML(w,w.entries[i],i).trim();
   const n=t.content.firstChild;sec.replaceWith(n);fitNotes(n);markOverflow(n);return n;
 }
-function refreshTotals(){const w=wById(curId),el=$('#totals');if(w&&el)el.textContent=totalsText(totals(w));updTimer()}
+function refreshTotals(){const w=wById(curId),el=$('#totals');if(w&&el)el.textContent=totalsText(totals(w));updTimer(true)}
 function setRestCell(row,w,s){
   if(!row)return;
   const nc=$('.nc',row);if(!nc)return;
@@ -932,6 +970,20 @@ document.addEventListener('click',e=>{
   const en=w&&sec?w.entries[+sec.dataset.e]:null;
 
   if(a==='start'){const nw={id:uid(),created:Date.now(),date:todayStr(),name:'',note:'',entries:[]};db.workouts.push(nw);save();render()}
+  else if(a==='ttoggle'&&w){timerCmd(w,'toggle')}
+  else if(a==='treset'&&w){timerCmd(w,'reset')}
+  else if(a==='finish'&&w){
+    if(!w.entries.some(hasData)&&!confirm('В тренировке нет ни одного выполненного подхода. Всё равно завершить?'))return;
+    w.finished=Date.now();delete w.rt;save();
+    const d=cfg().timer?workDur(w):0;
+    tab='today';editing=null;render();$('#app').scrollTop=0;
+    toast(d?`Тренировка завершена, время ${fmtDur(d)}`:'Тренировка завершена');
+  }
+  else if(a==='resume'){
+    const x=wById(t.dataset.id);if(!x)return;
+    delete x.finished;save();tab='today';editing=null;render();$('#app').scrollTop=0;
+  }
+  else if(a==='openh'){tab='history';editing=t.dataset.id;render();$('#app').scrollTop=0}
   else if(a==='repeat'){
     const last=byDateDesc()[0];if(!last)return;
     const entries=last.entries.map(x=>exType(x.ex)==='s'
@@ -1070,7 +1122,7 @@ document.addEventListener('change',e=>{
   else if(el.id==='resthint'){setCfg('restHint',el.checked);const r=$('#restcnt');if(r)r.hidden=!el.checked}
 });
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible')updTimer();
+  if(document.visibilityState==='visible')updTimer(false);
   if(document.visibilityState==='visible'&&tab==='today'&&!editing&&(!document.activeElement||document.activeElement===document.body))render();
 });
 
