@@ -65,6 +65,20 @@ button{cursor:pointer}
 .set{margin:4px 0}
 .n{width:24px;height:24px;display:grid;place-items:center;color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums}
 .n.pr{background:var(--gold);color:var(--ink);border-radius:50%;font-size:13px}
+/* номер подхода + отдых перед ним */
+.nc{display:flex;flex-direction:column;align-items:center;justify-content:center;width:24px;min-height:36px}
+.nc .n{height:22px;width:22px}
+.rs{font-size:10px;line-height:1;color:var(--blue);font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.02em;margin-top:1px}
+/* секундомер отдыха в сегодняшней тренировке */
+.tbar{position:sticky;top:env(safe-area-inset-top);z-index:5;display:flex;align-items:center;gap:10px;margin:6px 0 4px;padding:6px 12px;
+  background:var(--ink);color:#fff;border-radius:12px;box-shadow:0 4px 12px rgba(23,25,27,.18)}
+.tbar div{display:flex;flex-direction:column;line-height:1.1}
+.tbar small{font-size:11px;color:#B9BEC2;letter-spacing:.02em}
+.tbar b{font-family:var(--num);font-weight:800;font-size:26px;font-variant-numeric:tabular-nums}
+.tbar .tr{flex:1}
+.tbar .td{text-align:right;align-items:flex-end}
+.tbar .td b{font-size:18px;color:#DDE1E4}
+.tbar .hint{font-size:13px;color:#DDE1E4;line-height:1.3}
 .set input,.cardio input{width:100%;height:36px;border:1.5px solid var(--line);border-radius:8px;background:#fff;
   text-align:center;font-family:var(--num);font-weight:700;font-size:19px;padding:0;font-variant-numeric:tabular-nums}
 .set input::placeholder,.cardio input::placeholder{font-weight:500;color:#A3A8A5}
@@ -254,7 +268,7 @@ const fmtInt=n=>Math.round(n).toLocaleString('ru-RU');
 
 /* ---------- данные ---------- */
 const KEY='zhurnal.v1';
-const VERSION='1.18';
+const VERSION='1.19';
 /* Android-приложение: при сборке на GitHub сюда подставляется «владелец/репозиторий», откуда берутся новые версии APK */
 const GH_REPO='';
 const NP=window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()?Capacitor.Plugins||{}:null;   // null — обычный браузер/PWA
@@ -305,8 +319,56 @@ const exType=id=>exById(id)?.type||'s';
 const byDateDesc=()=>[...db.workouts].sort((a,b)=>b.date.localeCompare(a.date)||b.created-a.created);
 
 /* ---------- расчёты ---------- */
+/* ---------- время: отметки подходов ---------- */
+const HOUR=36e5;
+const fmtClock=ms=>{let x=Math.max(0,Math.floor(ms/1000));const h=Math.floor(x/3600);x-=h*3600;const m=Math.floor(x/60);x-=m*60;return h?`${h}:${pad(m)}:${pad(x)}`:`${m}:${pad(x)}`};
+const fmtDur=ms=>{const m=Math.round(ms/6e4);if(m<1)return '<1 мин';const h=Math.floor(m/60);return h?`${h} ч ${pad(m%60)} мин`:`${m} мин`};
+/* отметки времени выполненных подходов (силовые — подход с повторами, кардио — заполненное упражнение), по возрастанию */
+function stamps(w){
+  const a=[];
+  for(const en of w.entries){
+    if(exType(en.ex)==='s'){for(const s of en.sets||[])if(s.r&&s.t)a.push(s.t)}
+    else if(en.t&&(en.km||en.min))a.push(en.t);
+  }
+  return a.sort((x,y)=>x-y);
+}
+/* время тренировки: от начала до последнего подхода */
+function workDur(w){
+  const a=stamps(w);if(!a.length||!w.created)return 0;
+  const d=a[a.length-1]-w.created;
+  return d>0&&d<12*HOUR?d:0;
+}
+/* отдых перед подходом: от предыдущего выполненного подхода в этой тренировке */
+function restBefore(w,t){
+  let p=0;for(const x of stamps(w)){if(x<t)p=x;else break}
+  return p?t-p:0;
+}
+/* отметить время, когда подход впервые заполнен (только в сегодняшней тренировке и при включённой настройке) */
+function stamp(w,o,filled){
+  if(!filled||!o||o.t||!w||!cfg().timer||w.date!==todayStr())return false;
+  o.t=Date.now();return true;
+}
+const restLabel=(w,s)=>{if(!cfg().timer||!s||!s.r||!s.t)return '';const r=restBefore(w,s.t);return r?fmtClock(r):''};
+function timerBarHTML(w){
+  if(!cfg().timer||w.date!==todayStr())return '';
+  return `<div class="tbar" id="tbar">${timerBarInner(w)}</div>`;
+}
+function timerBarInner(w){
+  const a=stamps(w);
+  if(!a.length)return '<span class="hint">⏱ Секундомер отдыха запустится после первого подхода</span>';
+  const since=Date.now()-a[a.length-1];
+  return `<div class="tr"><small>Отдых</small><b id="trest">${since<3*HOUR?fmtClock(since):'—'}</b></div>
+    <div class="td"><small>Тренировка</small><b id="tdur">${fmtDur(workDur(w))}</b></div>`;
+}
+function updTimer(){
+  const el=$('#tbar');if(!el)return;
+  const w=curId&&wById(curId);if(!w)return;
+  el.innerHTML=timerBarInner(w);
+}
+setInterval(()=>{if($('#tbar')&&document.visibilityState==='visible')updTimer()},1000);
+
 function totals(w){
-  const t={sets:0,vol:0,km:0,min:0};
+  const t={sets:0,vol:0,km:0,min:0,dur:cfg().timer?workDur(w):0};
   for(const en of w.entries){
     if(exType(en.ex)==='s'){for(const s of en.sets||[]){if(s.r){t.sets++;t.vol+=(s.w||0)*s.r}}}
     else{t.km+=en.km||0;t.min+=en.min||0}
@@ -319,6 +381,7 @@ function totalsText(t){
   if(t.vol)p.push(`${fmtInt(t.vol)} кг`);
   if(t.km)p.push(`${fmtN(t.km)} км`);
   if(t.min)p.push(`${fmtN(t.min)} мин`);
+  if(t.dur)p.push(`время ${fmtDur(t.dur)}`);
   return p.join(', ')||'пока пусто';
 }
 function paceText(en){
@@ -389,7 +452,7 @@ function entryHTML(w,en,i){
     const rows=(en.sets||[]).map((s,j)=>{
       const pr=isPR(w,en,j);
       return `<div class="set${lb?' l':''}" data-s="${j}">
-        <span class="n${pr?' pr':''}"${pr?' aria-label="рекорд"':''}>${pr?'★':j+1}</span>
+        <span class="nc"><span class="n${pr?' pr':''}"${pr?' aria-label="рекорд"':''}>${pr?'★':j+1}</span>${(rl=>rl?`<small class="rs" aria-label="отдых перед подходом ${rl}">${rl}</small>`:'')(restLabel(w,s))}</span>
         <input inputmode="decimal" data-f="w" placeholder="0" value="${fmtN(toDisp(s.w,u))}" aria-label="Вес, ${uLabel(u)}">
         ${lb?`<span class="kgref">${kgRef(s.w)}</span>`:''}
         <input inputmode="numeric" data-f="r" placeholder="0" value="${s.r??''}" aria-label="Повторы">
@@ -415,6 +478,7 @@ function editorHTML(w,canBack){
     <div class="date">${fmtLong(w.date)}</div>
     <input class="title" data-f="name" placeholder="Название, например «Грудь и спина»" value="${esc(w.name)}">
     <div id="totals">${totalsText(totals(w))}</div>
+    ${timerBarHTML(w)}
     ${tab==='today'?restHTML(w):''}
     ${w.entries.map((en,i)=>entryHTML(w,en,i)).join('')}
     <div class="addrow"><button class="add" data-a="addex">+ Упражнение</button><button class="add alt" data-a="tplsheet">Из шаблона</button></div>
@@ -432,7 +496,7 @@ const MUSCLE_GROUPS=STRENGTH_GROUPS.filter(g=>g!=='Другое');   // «Дру
 const DONATE_URL='https://www.tbank-online.com/rm/r_TdmslDmFjB.fuBUyINwKo/RUnFB25791';
 const QR_IMG='data:image/png;base64,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';
 const REST_MAX=10;
-const cfg=()=>{const c=db.settings||{};return{restHint:c.restHint!==false,restCount:Math.min(REST_MAX,Math.max(1,Math.round(+c.restCount)||2))}};
+const cfg=()=>{const c=db.settings||{};return{restHint:c.restHint!==false,restCount:Math.min(REST_MAX,Math.max(1,Math.round(+c.restCount)||2)),timer:c.timer!==false}};
 function setCfg(k,v){db.settings=Object.assign({},db.settings,{[k]:v});save()}
 /* w — текущая тренировка; null — стартовый экран (считаем от сегодняшнего дня) */
 function restInfo(w){
@@ -587,7 +651,9 @@ function moreHTML(){
     <label class="sw"><span>Подсказывать не нагруженные группы</span><input type="checkbox" id="resthint"${c.restHint?' checked':''}></label>
     <div class="swrow" id="restcnt"${c.restHint?'':' hidden'}><span>Сколько прошлых тренировок анализировать</span>
       <div class="step"><button class="ib2" data-a="rcdec" aria-label="Меньше">−</button><span id="rcval">${c.restCount}</span><button class="ib2" data-a="rcinc" aria-label="Больше">+</button></div></div>
-    <p class="mute">На вкладке «Сегодня» показывает группы мышц, которые не нагружались в последних тренировках.</p></section>
+    <p class="mute">На вкладке «Сегодня» показывает группы мышц, которые не нагружались в последних тренировках.</p>
+    <label class="sw"><span>Показывать время между повторами</span><input type="checkbox" id="timerset"${c.timer?' checked':''}></label>
+    <p class="mute">После каждого подхода запускается секундомер отдыха, у подходов видно, сколько длился отдых перед ними. Время тренировки считается от её начала до последнего подхода.</p></section>
     <section class="box"><h2>Резервная копия</h2>
     <p class="mute">Данные хранятся только в этом телефоне. Если удалить приложение или очистить данные Safari, они пропадут. Сохраняй копию раз в пару недель в «Файлы» или отправляй себе.</p>
     <p class="mute">${last}</p>
@@ -656,7 +722,15 @@ function rerenderEntry(sec){
   t.innerHTML=entryHTML(w,w.entries[i],i).trim();
   const n=t.content.firstChild;sec.replaceWith(n);fitNotes(n);markOverflow(n);return n;
 }
-function refreshTotals(){const w=wById(curId),el=$('#totals');if(w&&el)el.textContent=totalsText(totals(w))}
+function refreshTotals(){const w=wById(curId),el=$('#totals');if(w&&el)el.textContent=totalsText(totals(w));updTimer()}
+function setRestCell(row,w,s){
+  if(!row)return;
+  const nc=$('.nc',row);if(!nc)return;
+  let rs=$('.rs',nc);const rl=restLabel(w,s);
+  if(!rl){rs&&rs.remove();return}
+  if(!rs){rs=document.createElement('small');rs.className='rs';nc.appendChild(rs)}
+  rs.textContent=rl;rs.setAttribute('aria-label','отдых перед подходом '+rl);
+}
 function updateStars(sec,w,en){
   $$('.set',sec).forEach((row,j)=>{
     const n=$('.n',row),pr=isPR(w,en,j);
@@ -888,7 +962,8 @@ document.addEventListener('click',e=>{
   }
   else if(a==='addset'&&en){
     const l=en.sets[en.sets.length-1];
-    en.sets.push(l?{w:l.w,r:l.r}:{w:null,r:null});save();rerenderEntry(sec);refreshTotals();
+    const ns=l?{w:l.w,r:l.r}:{w:null,r:null};
+    en.sets.push(ns);stamp(w,ns,!!ns.r);save();rerenderEntry(sec);refreshTotals();
   }
   else if(a==='delset'&&en){
     en.sets.splice(+t.closest('[data-s]').dataset.s,1);save();rerenderEntry(sec);refreshTotals();
@@ -974,10 +1049,11 @@ document.addEventListener('input',e=>{
     const en=w.entries[+sec.dataset.e];
     if(f==='w'||f==='r'){
       const s=en.sets[+el.closest('[data-s]').dataset.s];
-      if(f==='w'){s.w=fromDisp(num(el.value),unitOf(en,w));const rf=$('.kgref',el.closest('.set'));if(rf)rf.textContent=kgRef(s.w)}else{const n=num(el.value);s.r=n?Math.round(n):null}
+      if(f==='w'){s.w=fromDisp(num(el.value),unitOf(en,w));const rf=$('.kgref',el.closest('.set'));if(rf)rf.textContent=kgRef(s.w)}
+      else{const n=num(el.value);s.r=n?Math.round(n):null;stamp(w,s,!!s.r);setRestCell(el.closest('.set'),w,s)}
       updateStars(sec,w,en);
     }else if(f==='km'||f==='min'){
-      en[f]=num(el.value);$('.pace',sec).textContent=paceText(en);
+      en[f]=num(el.value);$('.pace',sec).textContent=paceText(en);stamp(w,en,!!(en.km||en.min));
     }else if(f==='enote'){
       en.note=el.value;fitNotes(sec);
     }
@@ -990,9 +1066,11 @@ document.addEventListener('change',e=>{
   else if(el.id==='progsel'){progEx=el.value;render()}
   else if(el.dataset.gsel){const ex=exById(el.dataset.gsel);if(ex){ex.group=el.value;save();render()}}
   else if(el.id==='imp'){importFile(el.files[0]);el.value=''}
+  else if(el.id==='timerset'){setCfg('timer',el.checked)}
   else if(el.id==='resthint'){setCfg('restHint',el.checked);const r=$('#restcnt');if(r)r.hidden=!el.checked}
 });
 document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')updTimer();
   if(document.visibilityState==='visible'&&tab==='today'&&!editing&&(!document.activeElement||document.activeElement===document.body))render();
 });
 
