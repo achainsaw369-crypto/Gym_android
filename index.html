@@ -253,6 +253,13 @@ nav{flex:none;background:var(--paper);border-top:1px solid var(--line);
 .qrw{width:100%;max-width:170px;margin:6px 0 4px;background:#fff;border-radius:8px;overflow:hidden}
 .qrw svg{display:block;width:100%;height:auto}
 .lnk{border:0;background:none;color:var(--blue);font-weight:600;font-size:13px;padding:6px 4px}
+#force{position:fixed;inset:0;z-index:100;background:var(--chalk);display:flex;align-items:center;justify-content:center;
+  padding:calc(24px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));overflow-y:auto}
+#force .fbox{width:100%;max-width:420px;text-align:center}
+#force .fic{width:72px;height:72px;margin:0 auto 14px;border-radius:50%;background:var(--iron);color:#fff;display:grid;place-items:center;font-size:38px;line-height:1}
+#force h2{font-family:var(--num);font-size:30px;line-height:1.1;margin:0 0 10px}
+#force p{margin:0 0 16px;font-size:16px;line-height:1.45}
+#force .mute{font-size:14px;margin:4px 0 14px}
 .mail{font-size:14px;color:var(--mute);margin:0 0 10px;padding:0 2px}
 .mail a{color:var(--blue);font-weight:650}
 .appver{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 14px;padding:0 2px}
@@ -344,7 +351,10 @@ const fmtInt=n=>Math.round(n).toLocaleString('ru-RU');
 
 /* ---------- данные ---------- */
 const KEY='zhurnal.v1';
-const VERSION='1.22';
+const VERSION='1.23';
+/* ОБЯЗАТЕЛЬНОЕ ОБНОВЛЕНИЕ: версии ниже этой перестают работать и просят обновиться.
+   Чтобы сделать релиз обязательным, поставь сюда номер этого же релиза (как в VERSION). '1.0' — обязательных обновлений нет. */
+const MIN_VERSION='1.0';
 /* Android-приложение: при сборке на GitHub сюда подставляется «владелец/репозиторий», откуда берутся новые версии APK */
 const GH_REPO='';
 const NP=window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()?Capacitor.Plugins||{}:null;   // null — обычный браузер/PWA
@@ -1106,6 +1116,52 @@ function autoCheckNative(){
     checkUpdateNative(true);
   }catch(e){}
 }
+/* ---------- обязательное обновление ---------- */
+const FORCE_KEY='zhurnal.force';
+/* откуда читать опубликованную версию: веб — свой же index.html, Android — сайт на GitHub Pages, запасной путь — файл в репозитории */
+const remoteIndexURLs=()=>IS_NATIVE?[SHARE_WEB+'index.html',`https://raw.githubusercontent.com/${GH_REPO||SHARE_REPO}/HEAD/index.html`]:['index.html'];
+async function fetchRemoteMeta(){
+  for(const u of remoteIndexURLs()){
+    try{
+      const r=await fetch(u+'?'+Date.now(),{cache:'no-store'});if(!r.ok)continue;
+      const t=await r.text();
+      const v=(t.match(/const VERSION='([^']+)'/)||[])[1],m=(t.match(/const MIN_VERSION='([^']+)'/)||[])[1];
+      if(v)return{ver:v,min:m||'0'};
+    }catch(e){}
+  }
+  return null;
+}
+function getForce(){try{const f=JSON.parse(localStorage.getItem(FORCE_KEY)||'null');return f&&f.min&&isNewer(f.min,VERSION)?f:null}catch(e){return null}}
+function clearForce(){try{localStorage.removeItem(FORCE_KEY)}catch(e){}$('#force')?.remove()}
+function showForce(f){
+  try{localStorage.setItem(FORCE_KEY,JSON.stringify(f))}catch(e){}
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+  closeSheet();
+  let el=$('#force');
+  if(!el){el=document.createElement('div');el.id='force';el.setAttribute('role','alertdialog');el.setAttribute('aria-modal','true');el.setAttribute('aria-labelledby','fh');document.body.appendChild(el)}
+  el.innerHTML=`<div class="fbox"><div class="fic" aria-hidden="true">⟳</div>
+    <h2 id="fh">Нужно обновить приложение</h2>
+    <p>Вышла версия ${esc(f.ver)} с важными изменениями. Твоя версия ${VERSION} больше не поддерживается. Обнови приложение, чтобы продолжить: все тренировки сохранятся.</p>
+    <button class="btn big" data-a="forceupd">${IS_NATIVE?'Скачать версию '+esc(f.ver):'Обновить'}</button>
+    <p class="mute">${IS_NATIVE?'Открой скачанный файл и нажми «Установить». Новая версия встанет поверх старой.':'Если после обновления это окно не исчезло, подожди пару минут и нажми ещё раз.'}</p>
+    <button class="btn ghost" data-a="export">Сохранить копию данных</button></div>`;
+}
+let forceBusy=false,forceLast=0;
+async function checkForced(){
+  if(forceBusy)return;forceBusy=true;forceLast=Date.now();
+  try{
+    const r=await fetchRemoteMeta();if(!r)return;            // нет связи — решение не меняем
+    const min=isNewer(r.min,r.ver)?'0':r.min;                // защита от ошибки: минимальная версия выше опубликованной — не блокируем
+    if(!isNewer(min,VERSION)){clearForce();return}
+    let f={min,ver:r.ver};
+    if(IS_NATIVE){
+      const apk=await fetchLatestApk().catch(()=>null);
+      if(!apk||isNewer(min,apk.ver))return;                  // APK нужной версии ещё не собран — пока не блокируем
+      f={min,ver:apk.ver,url:apk.url};
+    }
+    showForce(f);
+  }finally{forceBusy=false}
+}
 async function checkUpdate(){
   if(IS_NATIVE)return checkUpdateNative(false);
   toast('Проверяю…');
@@ -1283,6 +1339,7 @@ document.addEventListener('click',e=>{
     const u=t.dataset.url;
     (navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>toast('Ссылка скопирована'),()=>{prompt('Скопируй ссылку',u)});
   }
+  else if(a==='forceupd'){const f=getForce();if(IS_NATIVE){if(f&&f.url)openExternal(f.url)}else hardReload()}
   else if(a==='qr'){
     const box=t.closest('.thanks').querySelector('.qrbox'),show=box.hidden;
     box.hidden=!show;t.textContent=show?'Скрыть QR-код':'Показать QR-код';t.setAttribute('aria-expanded',show);
@@ -1363,6 +1420,7 @@ document.addEventListener('change',e=>{
   else if(el.id==='resthint'){setCfg('restHint',el.checked);const r=$('#restcnt');if(r)r.hidden=!el.checked}
 });
 document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&($('#force')||Date.now()-forceLast>10*6e4))checkForced();
   if(document.visibilityState==='visible')updTimer(false);
   if(document.visibilityState==='visible'&&tab==='today'&&!editing&&(!document.activeElement||document.activeElement===document.body))render();
 });
@@ -1405,11 +1463,14 @@ fitViewport();
 migrate();
 applyTheme();
 render();
+{const f=getForce();if(f)showForce(f);else{try{localStorage.removeItem(FORCE_KEY)}catch(e){}}}
+setTimeout(checkForced,1500);
 navigator.storage?.persist?.();
 if(!IS_NATIVE&&'serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 if(IS_NATIVE){
   /* кнопка «Назад» на Android: закрыть окно выбора → выйти из тренировки/шаблона → на «Сегодня» → свернуть приложение */
   try{NP.App.addListener('backButton',()=>{
+    if($('#force')){NP.App.minimizeApp?NP.App.minimizeApp():NP.App.exitApp();return}
     if($('#sheet')){closeSheet();return}
     const b=$('[data-a=back]')||$('[data-a=tpback]')||$('[data-a=mback]');
     if(b){b.click();return}
