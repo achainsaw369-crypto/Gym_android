@@ -9,6 +9,10 @@
     "SystemBars": {
       "style": "LIGHT",
       "insetsHandling": "css"
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_zhurnal",
+      "iconColor": "#D6322B"
     }
   }
 }
