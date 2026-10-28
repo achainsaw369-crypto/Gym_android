@@ -170,6 +170,12 @@ textarea{width:100%;min-height:70px;border:1.5px solid var(--line);border-radius
 .sel{width:100%;padding:12px;border:1.5px solid var(--ink);border-radius:12px;background:var(--paper);font-weight:650;margin-bottom:12px}
 .chart{background:var(--paper);border-radius:12px;padding:10px 8px 6px}
 .chart svg{width:100%;height:auto;display:block}
+.pmseg{display:flex;width:100%;margin:-4px 0 10px}
+.pmseg button{flex:1;height:34px;font-size:14px}
+.bwadd{display:flex;gap:8px;margin:0 0 12px}
+.bwadd input{flex:1;min-width:0;height:46px;padding:0 12px;border:1.5px solid var(--line);border-radius:10px;background:var(--field);font-size:18px;color:var(--ink)}
+.bwadd .btn{width:auto;margin:0;padding:0 18px}
+.bwdel{display:inline-grid;width:28px;height:24px;font-size:18px;vertical-align:middle}
 .rec{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
 .rec div{background:var(--paper);border-radius:12px;padding:10px 12px}
 .rec b{display:block;font-family:var(--num);font-size:26px;font-variant-numeric:tabular-nums}
@@ -260,6 +266,9 @@ nav{flex:none;background:var(--paper);border-top:1px solid var(--line);
 #force h2{font-family:var(--num);font-size:30px;line-height:1.1;margin:0 0 10px}
 #force p{margin:0 0 16px;font-size:16px;line-height:1.45}
 #force .mute{font-size:14px;margin:4px 0 14px}
+.ntime{flex:none;width:132px;height:40px;border:1.5px solid var(--line);border-radius:8px;background:var(--field);padding:0 8px;font-size:17px;color:var(--ink)}
+#notifset[hidden]{display:none}
+#ntext{min-height:60px;margin-top:4px;font-size:16px}
 .mail{font-size:14px;color:var(--mute);margin:0 0 10px;padding:0 2px}
 .mail a{color:var(--blue);font-weight:650}
 .appver{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 14px;padding:0 2px}
@@ -351,10 +360,10 @@ const fmtInt=n=>Math.round(n).toLocaleString('ru-RU');
 
 /* ---------- данные ---------- */
 const KEY='zhurnal.v1';
-const VERSION='1.23';
+const VERSION='1.25';
 /* ОБЯЗАТЕЛЬНОЕ ОБНОВЛЕНИЕ: версии ниже этой перестают работать и просят обновиться.
    Чтобы сделать релиз обязательным, поставь сюда номер этого же релиза (как в VERSION). '1.0' — обязательных обновлений нет. */
-const MIN_VERSION='1.0';
+const MIN_VERSION='1.24';
 /* Android-приложение: при сборке на GitHub сюда подставляется «владелец/репозиторий», откуда берутся новые версии APK */
 const GH_REPO='';
 const NP=window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()?Capacitor.Plugins||{}:null;   // null — обычный браузер/PWA
@@ -389,9 +398,10 @@ const defGroups=()=>DEFAULT_GROUPS.map(n=>({name:n,hint:!NOHINT.includes(n)}));
 const groupNames=()=>db.groups.map(g=>g.name);
 const groupOf=e=>e&&db.groups.some(g=>g.name===e.group)?e.group:FALLBACK;
 const typeOfM=m=>m==='dt'?'c':'s';
-const fresh=()=>({v:4,groups:defGroups(),templates:[],exercises:SEED.map(([name,type,group])=>{const m=type==='c'?'dt':(SEED_M[name.toLowerCase()]||'wr');return{id:uid(),name,type:typeOfM(m),group,m}}),workouts:[],lastBackup:null});
+const BW_DEFAULT=['подтягивания','отжимания','отжимания на брусьях'];   // упражнения с собственным весом по умолчанию
+const fresh=()=>({v:5,groups:defGroups(),templates:[],body:[],exercises:SEED.map(([name,type,group])=>{const m=type==='c'?'dt':(SEED_M[name.toLowerCase()]||'wr');const e={id:uid(),name,type:typeOfM(m),group,m};if(BW_DEFAULT.includes(name.toLowerCase()))e.bw=true;return e}),workouts:[],lastBackup:null});
 let db=(()=>{try{const j=JSON.parse(localStorage.getItem(KEY));if(j&&Array.isArray(j.workouts)&&Array.isArray(j.exercises))return j}catch(e){}return fresh()})();
-function save(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){toast('Не удалось сохранить: память браузера недоступна')}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){toast('Не удалось сохранить: память браузера недоступна')}if(typeof syncNotifsSoon==='function')syncNotifsSoon()}
 /* старые данные: проставить группы и один раз добавить новые упражнения из списка */
 function migrate(){
   let ch=false;
@@ -415,6 +425,9 @@ function migrate(){
     if(!db.groups.some(g=>g.name===e.group)){addGroup(e.group,true);ch=true}
   });
   if((db.v||1)<4){db.v=4;ch=true}
+  /* v5: свой вес (история взвешиваний) и флажок «с собственным весом» у упражнения */
+  if(!Array.isArray(db.body)){db.body=[];ch=true}
+  if((db.v||1)<5){db.exercises.forEach(e=>{if(e.bw==null&&BW_DEFAULT.includes(e.name.toLowerCase()))e.bw=true});db.v=5;ch=true}
   if(ch)save();
 }
 
@@ -505,10 +518,24 @@ function timerCmd(w,cmd){
   save();updTimer(true);
 }
 
+/* ---------- мой вес и тоннаж ---------- */
+const bodyList=()=>(db.body||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+const bodyNow=()=>{const l=bodyList();return l.length?l[l.length-1]:null};
+/* вес на дату: последнее взвешивание не позже этой даты; до первого взвешивания — первое известное */
+function bodyAt(date){const l=bodyList();if(!l.length)return 0;let v=l[0].kg;for(const x of l){if(x.date<=date)v=x.kg;else break}return v}
+function setBody(kg,date=todayStr()){if(!Array.isArray(db.body))db.body=[];const e=db.body.find(x=>x.date===date);if(e)e.kg=kg;else db.body.push({date,kg});save()}
+const exBW=id=>!!(exById(id)&&exById(id).bw);
+/* тоннаж: (вес из подхода + свой вес, если упражнение с собственным весом) × повторы; только «вес и повторы» */
+function enTon(en,date){
+  if(exM(en.ex)!=='wr')return 0;
+  const add=exBW(en.ex)?bodyAt(date):0;
+  return (en.sets||[]).reduce((a,s)=>a+(sDone(s,'wr')?((s.w||0)+add)*s.r:0),0);
+}
+const wTon=w=>w.entries.reduce((a,en)=>a+(exType(en.ex)==='s'?enTon(en,w.date):0),0);
 function totals(w){
-  const t={sets:0,vol:0,km:0,min:0,dur:cfg().timer?workDur(w):0};
+  const t={sets:0,vol:wTon(w),km:0,min:0,dur:cfg().timer?workDur(w):0};
   for(const en of w.entries){
-    if(exType(en.ex)==='s'){const m=exM(en.ex);for(const s of en.sets||[]){if(sDone(s,m)){t.sets++;if(m==='wr')t.vol+=(s.w||0)*s.r}}}
+    if(exType(en.ex)==='s'){const m=exM(en.ex);for(const s of en.sets||[])if(sDone(s,m))t.sets++}
     else{t.km+=en.km||0;t.min+=en.min||0}
   }
   return t;
@@ -598,7 +625,7 @@ function entryHTML(w,en,i){
         ${wt?`<input inputmode="numeric" data-f="d" placeholder="0" value="${s.d??''}" aria-label="Время, секунд">`:`<input inputmode="numeric" data-f="r" placeholder="0" value="${s.r??''}" aria-label="Повторы">`}
         <button class="ico" data-a="delset" aria-label="Убрать подход">−</button></div>`;
     }).join('');
-    body=`<div class="sethead${lb?' l':''}"><span></span><span>${uLabel(u)}</span>${lb?'<span>≈ кг</span>':''}<span>${wt?'сек':'повторы'}</span><span></span></div>${rows}
+    body=`<div class="sethead${lb?' l':''}"><span></span><span>${exBW(en.ex)&&!wt?'доп. ':''}${uLabel(u)}</span>${lb?'<span>≈ кг</span>':''}<span>${wt?'сек':'повторы'}</span><span></span></div>${rows}
       <button class="addset" data-a="addset">+ Подход</button>`;
   }else{
     body=`<div class="cardio">
@@ -672,6 +699,66 @@ function restHTML(w){
 const groupsText=w=>[...new Set(w.entries.map(e=>exById(e.ex)).filter(Boolean).map(groupOf))].join(', ');
 const DAY=864e5,BACKUP_EVERY=14*DAY;
 function ruDays(n){const m=n%10,h=n%100;return n+(h>=11&&h<=14?' дней':m===1?' день':m>=2&&m<=4?' дня':' дней')}
+/* ---------- напоминания о тренировке (Android: локальные уведомления) ---------- */
+const NOTIF_IDS=[101,102,103,104];               // первое напоминание и ещё три с тем же шагом, если тренировки так и не было
+const NOTIF_DEF={on:false,days:3,time:'18:00',text:'Ты не тренировался уже {дни}. Пора в зал! 💪'};
+const ncfg=()=>Object.assign({},NOTIF_DEF,(db.settings||{}).notif||{});
+function setN(k,v){const n=ncfg();n[k]=v;setCfg('notif',n)}
+const LN=()=>IS_NATIVE&&NP&&NP.LocalNotifications?NP.LocalNotifications:null;
+function lastWorkoutDate(){
+  const t=todayStr(),ds=db.workouts.filter(w=>w.date<=t&&w.entries.some(hasData)).map(w=>w.date).sort();
+  return ds.length?ds[ds.length-1]:null;
+}
+const dayStart=d=>{const x=new Date(d);x.setHours(0,0,0,0);return x};
+const notifText=(txt,days)=>String(txt||'').replace(/\{дни\}/g,ruDays(days));
+/* когда и с каким текстом прийти: через N дней после последней тренировки в заданное время; если срок уже прошёл — ближайшее такое время */
+function notifPlan(now=new Date()){
+  const n=ncfg(),last=lastWorkoutDate();
+  const [hh,mm]=String(n.time||'18:00').split(':').map(x=>parseInt(x,10)||0);
+  const base=last?parseD(last):new Date(now);
+  let first=dayStart(base);first.setDate(first.getDate()+n.days);first.setHours(hh,mm,0,0);
+  if(first.getTime()<=now.getTime()+6e4){first=new Date(now);first.setHours(hh,mm,0,0);if(first.getTime()<=now.getTime()+6e4)first.setDate(first.getDate()+1)}
+  return NOTIF_IDS.map((id,i)=>{
+    const at=new Date(first);at.setDate(at.getDate()+i*n.days);
+    const dd=Math.round((dayStart(at)-dayStart(base))/DAY);
+    return{id,at,body:notifText(n.text,dd)};
+  });
+}
+var nTimer=null;
+function syncNotifsSoon(){if(!LN())return;clearTimeout(nTimer);nTimer=setTimeout(syncNotifs,1500)}
+async function syncNotifs(){
+  const L=LN();if(!L)return;
+  try{
+    await L.cancel({notifications:NOTIF_IDS.map(id=>({id}))});
+    const n=ncfg();if(!n.on)return;
+    const p=await L.checkPermissions();if(p.display!=='granted')return;
+    await L.schedule({notifications:notifPlan().map(x=>({id:x.id,title:'Журнал тренировок',body:x.body,
+      schedule:{at:x.at,allowWhileIdle:true},isExactNotification:false}))});
+  }catch(e){}
+}
+function fmtWhen(d){return `${d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'})} в ${d.getHours()}:${pad(d.getMinutes())}`}
+function notifHTML(){
+  const n=ncfg();
+  if(!IS_NATIVE)return `<section class="box"><h2>Уведомления</h2>
+    <p class="mute">Напоминания о тренировке работают в приложении для Android. В веб-версии на iPhone телефон не умеет присылать отложенные уведомления, поэтому здесь их нет.</p></section>`;
+  if(!LN())return `<section class="box"><h2>Уведомления</h2><p class="mute">Чтобы включить напоминания, обнови приложение до последней версии.</p></section>`;
+  const next=n.on?notifPlan()[0].at:null;
+  return `<section class="box" id="notifbox"><h2>Уведомления</h2>
+    <label class="sw"><span>Напоминать о тренировке</span><input type="checkbox" id="notifon"${n.on?' checked':''}></label>
+    <div id="notifset"${n.on?'':' hidden'}>
+    <div class="swrow"><span>Через сколько дней без тренировки</span>
+      <div class="step"><button class="ib2" data-a="ndec" aria-label="Меньше">−</button><span id="ndays">${n.days}</span><button class="ib2" data-a="ninc" aria-label="Больше">+</button></div></div>
+    <div class="swrow"><span>Во сколько напомнить</span><input type="time" id="ntime" class="ntime" value="${esc(n.time)}"></div>
+    <label class="fl">Текст уведомления<textarea id="ntext" rows="2" maxlength="200">${esc(n.text)}</textarea></label>
+    <p class="mute">Вместо {дни} подставится, сколько дней прошло с последней тренировки. Если тренировки так и не будет, напоминание повторится ещё три раза с тем же шагом.</p>
+    <p class="mute" id="nnext">${next?`Следующее напоминание: ${fmtWhen(next)}, если до этого не будет тренировки.`:''}</p>
+    <button class="btn ghost" data-a="ntest">Прислать пример через 5 секунд</button></div></section>`;
+}
+function refreshNotifUI(){
+  const n=ncfg(),d=$('#ndays'),x=$('#nnext');
+  if(d)d.textContent=n.days;
+  if(x)x.textContent=n.on?`Следующее напоминание: ${fmtWhen(notifPlan()[0].at)}, если до этого не будет тренировки.`:'';
+}
 function backupBannerHTML(){
   if(!db.workouts.length)return '';
   const now=Date.now();
@@ -719,7 +806,7 @@ function historyHTML(){
   return html;
 }
 
-function chartSVG(pts,color,unit){
+function chartSVG(pts,color,unit,opt={}){
   const W=320,H=170,L=38,R=12,T=14,B=26;
   let min=Math.min(...pts.map(p=>p.v)),max=Math.max(...pts.map(p=>p.v));
   if(min===max){max+=1;min=Math.max(0,min-1)}else{const d=(max-min)*.2;min=Math.max(0,min-d);max+=d}
@@ -734,7 +821,7 @@ function chartSVG(pts,color,unit){
   const line=pts.map((p,i)=>`${i?'L':'M'}${X(i)},${Y(p.v)}`).join('');
   let rec=pts[0].v;
   const dots=pts.map((p,i)=>{
-    const isRec=i>0&&p.v>rec;if(isRec)rec=p.v;
+    const isRec=opt.rec!==false&&i>0&&p.v>rec;if(isRec)rec=p.v;
     return `<circle cx="${X(i)}" cy="${Y(p.v)}" r="${isRec?5.5:3.5}" fill="${isRec?'#E8A900':color}" style="stroke:var(--paper)" stroke-width="1.5"/>`;
   }).join('');
   const lab=(i,anchor)=>`<text x="${X(i)}" y="${H-6}" text-anchor="${anchor}" font-size="11" style="fill:var(--mute)">${fmtMid(pts[i].d)}</text>`;
@@ -758,18 +845,21 @@ function progressHTML(){
   const cnt={};
   db.workouts.forEach(w=>w.entries.forEach(en=>{if(hasData(en))cnt[en.ex]=(cnt[en.ex]||0)+1}));
   const ids=Object.keys(cnt).filter(id=>exById(id)).sort((a,b)=>cnt[b]-cnt[a]);
-  if(!ids.length)return html+'<p class="mute">Когда внесёшь первые подходы или пробежки, здесь появятся графики и рекорды по каждому упражнению.</p>';
-  if(!ids.includes(progEx))progEx=ids[0];
+  if(!ids.length&&!bodyList().length)return html+'<p class="mute">Когда внесёшь первые подходы, пробежки или свой вес, здесь появятся графики и рекорды.</p>';
+  if(progEx!=='__ton'&&progEx!=='__bw'&&!ids.includes(progEx))progEx=ids[0]||'__bw';
+  const opts=`<optgroup label="Общее"><option value="__ton"${progEx==='__ton'?' selected':''}>Тоннаж по тренировкам</option><option value="__bw"${progEx==='__bw'?' selected':''}>Мой вес</option></optgroup>`+groupNames().map(g=>{
+    const it=ids.filter(id=>groupOf(exById(id))===g).sort((a,b)=>exName(a).localeCompare(exName(b),'ru'));
+    return it.length?`<optgroup label="${esc(g)}">${it.map(id=>`<option value="${id}"${id===progEx?' selected':''}>${esc(exName(id))}</option>`).join('')}</optgroup>`:'';
+  }).join('');
+  html+=`<select class="sel" id="progsel" aria-label="Что показать">${opts}</select>`;
+  if(progEx==='__bw')return html+bodyProgressHTML();
+  if(progEx==='__ton')return html+tonProgressHTML();
   const type=exType(progEx);
   const sess=[...db.workouts].sort((a,b)=>a.date.localeCompare(b.date)||a.created-b.created)
     .map(w=>({w,en:w.entries.find(e=>e.ex===progEx&&hasData(e))})).filter(x=>x.en);
-  const opts=groupNames().map(g=>{
-    const it=ids.filter(id=>groupOf(exById(id))===g).sort((a,b)=>exName(a).localeCompare(exName(b),'ru'));
-    return it.length?`<optgroup label="${g}">${it.map(id=>`<option value="${id}"${id===progEx?' selected':''}>${esc(exName(id))}</option>`).join('')}</optgroup>`:'';
-  }).join('');
-  html+=`<select class="sel" id="progsel" aria-label="Упражнение">${opts}</select>`;
-  let pts,unit,recs;
+  let pts,unit,recs,ton=false;
   const pm=exM(progEx);
+  if(pm==='wr')html+=`<div class="seg pmseg" role="group" aria-label="Что показать на графике"><button data-a="pmetric" data-v="w" class="${progMetric==='t'?'':'on'}">Вес</button><button data-a="pmetric" data-v="t" class="${progMetric==='t'?'on':''}">Тоннаж</button></div>`;
   if(pm==='wt'){
     const dn=x=>x.en.sets.filter(s=>s.d);
     const useW=sess.some(x=>dn(x).some(s=>s.w>0));
@@ -777,6 +867,11 @@ function progressHTML(){
     pts=sess.map(x=>({d:x.w.date,v:useW?Math.max(...dn(x).map(s=>s.w||0)):Math.max(...dn(x).map(s=>s.d))}));
     let bd=0,bw=0;sess.forEach(x=>dn(x).forEach(s=>{bd=Math.max(bd,s.d);bw=Math.max(bw,s.w||0)}));
     recs=[[fmtSec(bd),'рекорд по времени'],useW?[fmtN(bw),'лучший вес, кг']:[String(sess.length),'тренировок']];
+  }else if(pm==='wr'&&progMetric==='t'){
+    ton=true;
+    unit='тоннаж в упражнении за тренировку, кг';
+    pts=sess.map(x=>({d:x.w.date,v:enTon(x.en,x.w.date)}));
+    recs=tonRecs(pts.map(p=>p.v));
   }else if(type==='s'){
     const useW=sess.some(x=>x.en.sets.some(s=>s.r&&s.w>0));
     unit=useW?'лучший вес, кг':'максимум повторов';
@@ -795,9 +890,39 @@ function progressHTML(){
   }
   pts=pts.slice(-20);
   html+=`<div class="chart">${chartSVG(pts,type==='s'?'#D6322B':'#1F5FBF',unit)}</div>
-    <p class="mute">${esc(unit)}. Золотые точки — новые рекорды.</p>
+    <p class="mute">${esc(unit)}. Золотые точки — новые рекорды.${ton&&exBW(progEx)?' Учтён твой вес.':''}</p>
     <div class="rec">${recs.map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div>`;
-  html+=sess.slice(-6).reverse().map(x=>`<div class="sess"><span>${fmtMid(x.w.date)}</span><span>${type==='s'?setsText(x.en):cardioText(x.en)+(paceText(x.en)?', '+paceText(x.en).split(',')[0]:'')}${x.en.note&&x.en.note.trim()?`<small>${esc(x.en.note.trim())}</small>`:''}</span></div>`).join('');
+  html+=sess.slice(-6).reverse().map(x=>`<div class="sess"><span>${fmtMid(x.w.date)}</span><span>${type==='s'?setsText(x.en)+(ton?` · ${fmtInt(enTon(x.en,x.w.date))} кг`:''):cardioText(x.en)+(paceText(x.en)?', '+paceText(x.en).split(',')[0]:'')}${x.en.note&&x.en.note.trim()?`<small>${esc(x.en.note.trim())}</small>`:''}</span></div>`).join('');
+  return html;
+}
+let progMetric='w';     // у упражнений «вес и повторы»: 'w' — лучший вес, 't' — тоннаж
+/* рекорд и среднее за 5 последних тренировок с изменением к 5 предыдущим */
+function tonRecs(v){
+  const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+  const l5=v.slice(-5),p5=v.slice(-10,-5);
+  const d=p5.length&&avg(p5)?Math.round((avg(l5)/avg(p5)-1)*100):null;
+  return [[fmtInt(Math.max(0,...v)),'рекорд за тренировку, кг'],
+          [fmtInt(avg(l5)),`в среднем за ${l5.length===1?'последнюю тренировку':`последние ${l5.length} ${l5.length<5?'тренировки':'тренировок'}`}${d==null?'':`, ${d>0?'+':''}${d}% к предыдущим`}`]];
+}
+function tonProgressHTML(){
+  const sess=[...db.workouts].sort((a,b)=>a.date.localeCompare(b.date)||a.created-b.created).map(w=>({w,t:wTon(w)})).filter(x=>x.t>0);
+  if(!sess.length)return '<p class="mute">Тоннаж считается по упражнениям «вес и повторы»: вес × повторы по всем подходам тренировки. Внеси подходы, и здесь появится график.</p>';
+  const pts=sess.map(x=>({d:x.w.date,v:x.t})).slice(-20);
+  return `<div class="chart">${chartSVG(pts,'#D6322B','тоннаж за тренировку, кг')}</div>
+    <p class="mute">Тоннаж за тренировку, кг: вес × повторы по всем подходам${bodyNow()?', в упражнениях с собственным весом добавлен твой вес':''}. Золотые точки — новые рекорды.</p>
+    <div class="rec">${tonRecs(sess.map(x=>x.t)).map(r=>`<div><b>${r[0]}</b><span>${r[1]}</span></div>`).join('')}</div>`+
+    sess.slice(-8).reverse().map(x=>`<div class="sess"><span>${fmtMid(x.w.date)}</span><span>${esc(x.w.name||groupsText(x.w)||'Тренировка')} · <b>${fmtInt(x.t)} кг</b></span></div>`).join('');
+}
+function bodyProgressHTML(){
+  const l=bodyList(),now=l[l.length-1];
+  let html=`<div class="bwadd"><input id="bwin2" inputmode="decimal" placeholder="Вес, кг" aria-label="Вес, кг" value=""><button class="btn" data-a="bwsave">Записать</button></div>`;
+  if(!l.length)return html+'<p class="mute">Записывай вес, например раз в неделю, и здесь появится график. Вес также нужен для тоннажа в упражнениях с собственным весом.</p>';
+  const pts=l.map(x=>({d:x.date,v:x.kg})).slice(-30);
+  const ago=new Date();ago.setDate(ago.getDate()-30);
+  const base=bodyAt(toStr(ago))||l[0].kg,dd=Math.round((now.kg-base)*10)/10;
+  html+=`<div class="chart">${chartSVG(pts,'#1F5FBF','вес, кг',{rec:false})}</div>
+    <div class="rec"><div><b>${fmtN(now.kg)}</b><span>текущий вес, кг (${fmtMid(now.date)})</span></div><div><b>${dd>0?'+':''}${fmtN(dd)}</b><span>изменение за 30 дней, кг</span></div></div>`;
+  html+=l.slice(-10).reverse().map(x=>`<div class="sess"><span>${fmtMid(x.date)}</span><span>${fmtN(x.kg)} кг <button class="ico bwdel" data-a="bwdel" data-date="${x.date}" aria-label="Удалить запись">×</button></span></div>`).join('');
   return html;
 }
 const MAIL='chainsaw3@yandex.ru';
@@ -833,6 +958,9 @@ function moreHTML(){
       <button class="navrow" data-a="mview" data-v="groups"><span>Мышечные группы</span><small>${db.groups.length}</small><b>›</b></button>
       <button class="navrow" data-a="mview" data-v="tpl"><span>Шаблоны тренировок</span><small>${db.templates.length}</small><b>›</b></button>
     </section>
+    <section class="box"><h2>Мой вес</h2>
+    <div class="swrow"><span>Текущий вес, кг</span><input id="bwin" class="ntime" inputmode="decimal" placeholder="—" value="${bodyNow()?fmtN(bodyNow().kg):''}" aria-label="Мой вес, кг"></div>
+    <p class="mute">${bodyNow()?`Записан ${fmtMid(bodyNow().date)}. `:''}Каждое изменение сохраняется с датой: на вкладке «Прогресс» есть график веса. Вес также идёт в тоннаж упражнений с собственным весом — подтягиваний, отжиманий, брусьев.</p></section>
     <section class="box"><h2>Функциональность</h2>
     <label class="sw"><span>Подсказывать не нагруженные группы</span><input type="checkbox" id="resthint"${c.restHint?' checked':''}></label>
     <div class="swrow" id="restcnt"${c.restHint?'':' hidden'}><span>Сколько прошлых тренировок анализировать</span>
@@ -841,6 +969,7 @@ function moreHTML(){
     <label class="sw"><span>Показывать время между повторами</span><input type="checkbox" id="timerset"${c.timer?' checked':''}></label>
     <p class="mute">После каждого подхода запускается секундомер отдыха, у подходов видно, сколько длился отдых перед ними. Время тренировки считается от её начала до последнего подхода.</p>
     <label class="sw"><span>Тёмная тема</span><input type="checkbox" id="darkset"${c.dark?' checked':''}></label></section>
+    ${notifHTML()}
     <section class="box"><h2>Резервная копия</h2>
     <p class="mute">Данные хранятся только в этом телефоне. Если удалить приложение или очистить данные Safari, они пропадут. Сохраняй копию раз в пару недель в «Файлы» или отправляй себе.</p>
     <p class="mute">${last}</p>
@@ -868,6 +997,8 @@ function exCardHTML(e){
     <label class="fl">Мышечная группа<select id="exgroup">${groupNames().map(g=>`<option${g===groupOf(e)?' selected':''}>${esc(g)}</option>`).join('')}</select></label>
     <div class="fl">Как измеряется подход</div>
     ${Object.keys(MEAS).map(k=>`<label class="mopt"><input type="radio" name="meas" value="${k}"${e.m===k?' checked':''}><span><b>${MEAS[k]}</b><small>${MEAS_EX[k]}</small></span></label>`).join('')}
+    ${e.m==='wr'?`<label class="sw"><span>Упражнение с собственным весом</span><input type="checkbox" id="exbw"${e.bw?' checked':''}></label>
+    <p class="mute">В тоннаж пойдёт твой вес плюс дополнительный вес из подхода (пояс, жилет).${bodyNow()?'':' Укажи свой вес в Настройках.'}</p>`:''}
     <p class="mute">${n?`Есть в ${n} ${n%10===1&&n%100!==11?'тренировке':'тренировках'}.`:'В тренировках ещё не встречалось.'}${inTpl?' Входит в шаблон.':''}</p>
     <button class="danger" data-a="exdelete">Удалить упражнение</button>`;
 }
@@ -1186,6 +1317,7 @@ function importFile(f){
       });
       const ids=new Set(db.workouts.map(w=>w.id));let n=0;
       j.workouts.forEach(w=>{if(ids.has(w.id))return;w.entries.forEach(en=>en.ex=map[en.ex]||en.ex);db.workouts.push(w);n++});
+      (j.body||[]).forEach(x=>{if(x&&/^\d{4}-\d{2}-\d{2}$/.test(x.date)&&+x.kg>0&&!(db.body||[]).some(y=>y.date===x.date)){db.body=db.body||[];db.body.push({date:x.date,kg:+x.kg})}});
       (j.groups||[]).forEach(g=>{if(g&&g.name&&!db.groups.some(x=>x.name.toLowerCase()===String(g.name).toLowerCase()))addGroup(String(g.name),g.hint!==false)});
       (j.templates||[]).forEach(tp=>{if(db.templates.some(x=>x.id===tp.id))return;tp.items.forEach(it=>it.ex=map[it.ex]||it.ex);db.templates.push(tp)});
       migrate();save();render();toast(`Добавлено тренировок: ${n}`);
@@ -1344,6 +1476,25 @@ document.addEventListener('click',e=>{
     const box=t.closest('.thanks').querySelector('.qrbox'),show=box.hidden;
     box.hidden=!show;t.textContent=show?'Скрыть QR-код':'Показать QR-код';t.setAttribute('aria-expanded',show);
   }
+  else if(a==='pmetric'){progMetric=t.dataset.v;const st=$('#app').scrollTop;render();$('#app').scrollTop=st}
+  else if(a==='bwsave'){
+    const inp=$('#bwin2'),kg=num(inp&&inp.value);
+    if(!(kg>=20&&kg<=400)){toast('Укажи вес от 20 до 400 кг');return}
+    setBody(Math.round(kg*10)/10);render();toast('Вес записан');
+  }
+  else if(a==='bwdel'){
+    const d=t.dataset.date;if(!confirm(`Удалить запись веса за ${fmtMid(d)}?`))return;
+    db.body=(db.body||[]).filter(x=>x.date!==d);save();const st=$('#app').scrollTop;render();$('#app').scrollTop=st;
+  }
+  else if(a==='ninc'||a==='ndec'){
+    const n=Math.min(30,Math.max(1,ncfg().days+(a==='ninc'?1:-1)));setN('days',n);refreshNotifUI();
+  }
+  else if(a==='ntest'){
+    const L=LN();if(!L)return;
+    const last=lastWorkoutDate(),dd=last?Math.round((dayStart(new Date())-dayStart(parseD(last)))/DAY):ncfg().days;
+    L.schedule({notifications:[{id:199,title:'Журнал тренировок',body:notifText(ncfg().text,dd),schedule:{at:new Date(Date.now()+5000),allowWhileIdle:true},isExactNotification:false}]})
+      .then(()=>toast('Пример придёт через 5 секунд — можно свернуть приложение'),()=>toast('Не удалось отправить уведомление'));
+  }
   else if(a==='rcinc'||a==='rcdec'){
     const n=Math.min(REST_MAX,Math.max(1,cfg().restCount+(a==='rcinc'?1:-1)));
     setCfg('restCount',n);const v=$('#rcval');if(v)v.textContent=n;
@@ -1369,6 +1520,7 @@ document.addEventListener('click',e=>{
 document.addEventListener('input',e=>{
   const el=e.target,f=el.dataset.f;
   if(el.id==='q'){pickQ=el.value;pickNew=false;renderPick();return}
+  if(el.id==='ntext'){setN('text',el.value);return}
   if(f==='tname'){const tp=db.templates.find(x=>x.id===tplEditing);if(tp){tp.name=el.value;save()}return}
   if(!f||!curId)return;
   const w=wById(curId);if(!w)return;
@@ -1398,6 +1550,24 @@ document.addEventListener('change',e=>{
   else if(el.id==='imp'){importFile(el.files[0]);el.value=''}
   else if(el.id==='timerset'){setCfg('timer',el.checked)}
   else if(el.id==='darkset'){setCfg('dark',el.checked);applyTheme()}
+  else if(el.id==='bwin'){
+    if(el.value.trim()===''){const b=bodyNow();el.value=b?fmtN(b.kg):'';return}
+    const kg=num(el.value);
+    if(!(kg>=20&&kg<=400)){toast('Укажи вес от 20 до 400 кг');const b=bodyNow();el.value=b?fmtN(b.kg):'';return}
+    setBody(Math.round(kg*10)/10);toast('Вес записан');const st=$('#app').scrollTop;render();$('#app').scrollTop=st;
+  }
+  else if(el.id==='exbw'){const ex=exById(exEditing);if(ex){ex.bw=el.checked;save()}}
+  else if(el.id==='notifon'){
+    const L=LN();if(!L){el.checked=false;return}
+    if(el.checked){
+      (async()=>{
+        let p;try{p=await L.checkPermissions();if(p.display!=='granted')p=await L.requestPermissions()}catch(e){p={display:'denied'}}
+        if(p.display!=='granted'){el.checked=false;setN('on',false);toast('Разреши уведомления для «Журнала тренировок» в настройках телефона');return}
+        setN('on',true);const box=$('#notifset');if(box)box.hidden=false;refreshNotifUI();syncNotifs();
+      })();
+    }else{setN('on',false);const box=$('#notifset');if(box)box.hidden=true;syncNotifs()}
+  }
+  else if(el.id==='ntime'){if(/^\d{1,2}:\d{2}$/.test(el.value)){setN('time',el.value);refreshNotifUI()}}
   else if(el.id==='exname'){
     const ex=exById(exEditing);if(!ex)return;const v=el.value.trim();
     if(!v){toast('Название не может быть пустым');el.value=ex.name;return}
@@ -1410,6 +1580,7 @@ document.addEventListener('change',e=>{
       $$('input[name=meas]').forEach(r=>r.checked=r.value===ex.m);return;
     }
     ex.m=el.value;ex.type=typeOfM(ex.m);save();toast(`Способ измерения: ${MEAS[ex.m].toLowerCase()}`);
+    const st=$('#app').scrollTop;render();$('#app').scrollTop=st;
   }
   else if(el.classList.contains('gname')){
     const i=+el.dataset.gi,g=db.groups[i];if(!g)return;
@@ -1465,6 +1636,7 @@ applyTheme();
 render();
 {const f=getForce();if(f)showForce(f);else{try{localStorage.removeItem(FORCE_KEY)}catch(e){}}}
 setTimeout(checkForced,1500);
+if(IS_NATIVE)setTimeout(syncNotifs,2000);
 navigator.storage?.persist?.();
 if(!IS_NATIVE&&'serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 if(IS_NATIVE){
